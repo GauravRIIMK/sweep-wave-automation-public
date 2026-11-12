@@ -3,7 +3,8 @@
 > **Public snapshot.** This copy shows the code, tests and GitHub Actions workflows. Runtime
 > state (`state/`), one-off lead-specific scripts and personal assets are not included, and
 > real people's names and emails in tests and code have been replaced with synthetic examples.
-> The live system runs from a private repository.
+> The live system runs from a private repository. The GitHub Actions definitions are kept in
+> [`workflows-reference/`](workflows-reference/) so they can be read without running here.
 
 Daily, unattended job-search follow-ups from Gmail Account A
 (`rathore.gaurav1007@gmail.com`), running on GitHub Actions.
