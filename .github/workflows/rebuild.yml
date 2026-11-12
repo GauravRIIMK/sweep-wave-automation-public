@@ -1,0 +1,102 @@
+name: Rebuild drafts with resume
+
+# Manual only, never scheduled. It rewrites real drafts in a real mailbox: for each
+# body-only draft it creates a replacement carrying assets/Gaurav_Rathore_Resume.pdf and
+# then trashes the original. Nothing here delivers mail; sending stays with the paced
+# dispatcher, which now refuses anything under MIN_SEND_BYTES.
+#
+# WHY: every draft this pipeline wrote before 2026-09-17 was bare text/plain. The owner
+# attaches the CV inside the Gmail app, and when that 300KB upload cannot finish, the app
+# parks the message in the Outbox at "Uploading" and the server keeps the attachment-less
+# copy. 97 messages sat stuck that way while only 9 drafts in the mailbox carried a file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would be rebuilt, change nothing"
+        type: boolean
+        default: true
+      limit:
+        description: "Max drafts to rebuild this run (0 = all)"
+        type: string
+        default: "0"
+      payloads:
+        description: "Path to re-crafted bodies, e.g. state/recraft_payloads.json"
+        type: string
+        default: ""
+      allow_ids:
+        description: "Comma-separated draft ids sent_log never recorded, to treat as authored"
+        type: string
+        default: ""
+
+concurrency:
+  # Must never overlap the dispatcher or the daily batch: all three write to the same
+  # drafts folder, and a rebuild that trashes a draft mid-send is the worst case.
+  group: outreach-drafts
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    # ~2s per draft (detail + body + thread + create + trash), 130 drafts is well inside.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Rebuild
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          MIN_SEND_BYTES: ${{ vars.MIN_SEND_BYTES || '50000' }}
+        run: |
+          python -m pipeline.rebuild_drafts \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.payloads != '' && format('--payloads {0}', inputs.payloads) || '' }} \
+            ${{ inputs.allow_ids != '' && format('--allow-ids {0}', inputs.allow_ids) || '' }} \
+            --limit ${{ inputs.limit }}
+
+      - name: Commit state
+        if: always()
+        run: |
+          git config user.name "outreach-bot"
+          git config user.email "actions@github.com"
+          git add state/ || true
+          if git diff --staged --quiet; then echo "no state changes"; exit 0; fi
+          git commit -q -m "rebuild: $(date -u +%Y-%m-%dT%H:%MZ)"
+          ok=0
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then ok=1; break; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::state/rebuilt_ids.json could not be pushed. The rebuilt draft ids are only in this run's log; recover them from there before dispatching."
+            exit 1
+          fi
+
+      - name: Job summary
+        if: always()
+        run: |
+          F="state/rebuild-$(date -u +%Y-%m-%d).json"
+          echo "## Draft rebuild $(date -u +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
+          if [ -f "$F" ]; then
+            python - "$F" >> $GITHUB_STEP_SUMMARY <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1],encoding="utf-8"))
+          s=r.get("summary",{})
+          print(f"- rebuilt: **{s.get('rebuilt',0)}**  quarantined: **{s.get('quarantined',0)}**  skipped: {s.get('skipped',0)}  errors: {s.get('errors',0)}")
+          for k,v in (r.get("skipped") or {}).items(): print(f"  - skipped, {k}: {v}")
+          for q in (r.get("quarantined") or [])[:25]: print(f"  - QUARANTINED {q['to']}: {'; '.join(q['reasons'])}")
+          PY
+          else
+            echo "No report written." >> $GITHUB_STEP_SUMMARY
+          fi

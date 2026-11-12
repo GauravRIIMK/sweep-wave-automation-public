@@ -1,0 +1,91 @@
+name: Queue guard
+
+# Runs shortly BEFORE the mailbox's daily send burst (observed 04:03-04:35 UTC) and
+# clears any queued draft whose recipient replied while it was waiting. Without this,
+# a follow-up created days earlier can land on top of someone's answer.
+#
+# 03:45 UTC = 09:15 IST, ahead of the earliest burst start observed so far (04:03 UTC).
+# Cheap by design: Gmail reads and trashes only, no model calls.
+
+on:
+  schedule:
+    - cron: "45 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would be trashed, trash nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: outreach-queue-guard
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    # ~2.2s per queued draft; 300 queued is ~11 min. Headroom for rate-limit backoff.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Sweep the queue
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+        run: |
+          python -m pipeline.run_guard \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }}
+
+      - name: Commit state
+        if: always()
+        run: |
+          git config user.name "outreach-bot"
+          git config user.email "actions@github.com"
+          git add state/ || true
+          if git diff --staged --quiet; then echo "no state changes"; exit 0; fi
+          git commit -q -m "queue guard: $(date -u +%Y-%m-%d)"
+          # This job and the daily batch both write holds.json and pool.json, and the
+          # guard fires at 03:45 while a daily run started at 00:30 is often still going.
+          # The old `|| true` pair swallowed the resulting rebase conflict and the failed
+          # push, silently discarding whichever run lost the race. Losing the GUARD's
+          # write is the worse direction: holds["replied"] reverts, and the follow-up the
+          # guard just pulled back gets sent after all, on top of someone's answer.
+          ok=0
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then ok=1; break; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::Queue-guard state could not be pushed after 5 attempts. Drafts it trashed are gone from Gmail but holds.json has reverted, so those leads look eligible again. Re-run this workflow before the next dispatch slot."
+            exit 1
+          fi
+          echo "state pushed"
+
+      - name: Job summary
+        if: always()
+        run: |
+          F="state/runs/$(date -u +%Y-%m-%d)-guard.json"
+          echo "## Queue guard $(date -u +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
+          if [ -f "$F" ]; then
+            python - "$F" >> $GITHUB_STEP_SUMMARY <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1],encoding="utf-8"))
+          n=len(r.get("rescued",[]))
+          print(f"- drafts pulled back before sending: **{n}**")
+          for x in r.get("rescued",[]):
+              print(f"  - {x['email']} (replied {x['gap_hours']}h after the draft was queued)")
+          if r.get("errors"): print("- errors:", "; ".join(r["errors"][:5]))
+          PY
+          else
+            echo "No report written." >> $GITHUB_STEP_SUMMARY
+          fi

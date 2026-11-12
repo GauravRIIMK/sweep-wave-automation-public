@@ -1,0 +1,713 @@
+{
+ "version": "1.5.1",
+ "updated": "2026-09-10",
+ "purpose": "Single source of truth for the pre-send tone gate. Consumed by tone/tone_gate.py (Claude-driven sweeps and skills) and rendered into gmail-apps-script/ToneGateRules.gs by tone/build_rules_gs.py (Apps Script pipeline). Edit THIS file only; never edit the .gs rendering by hand.",
+ "principle": "Non-response is the answer, not an error state. Every touch must cost the recipient nothing: no ledger of my own persistence, no request that they produce a rejection, one optional ask at most, and something new each time or no mail at all.",
+ "touch_kinds": [
+  "initial",
+  "followup",
+  "final",
+  "reply"
+ ],
+ "regex_rules": [
+  {
+   "id": "T01_COUNT_ORDINAL",
+   "family": "COUNTING",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\b(?:(?:my|this is (?:my|the)|this makes|counting|marks|is now)\\s+[^.\\n]{0,40}?)?\\b(?:second|third|fourth|fifth|sixth|seventh|\\d+(?:st|nd|rd|th))\\s+(?:and\\s+(?:final|last)\\s+)?(?:note|mail|email|message|nudge|follow[- ]?up|attempt|time)\\b",
+   "message": "Counts my own follow-ups back at the recipient (ordinal note/mail/time). Reads as a ledger of their debt.",
+   "examples_block": [
+    "Fourth and final note from me",
+    "this is my third note to ZS",
+    "I know this is my fourth note",
+    "second time I am writing"
+   ],
+   "examples_pass": [
+    "I wrote in July about growth roles at HP."
+   ]
+  },
+  {
+   "id": "T01_COUNT_CARDINAL",
+   "family": "COUNTING",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\b(?:written|wrote|writing|mailed|emailed|reached out|sent|notes?|mails?|emails?|messages?)\\b[^.\\n]{0,40}?\\b(?:twice|three times|four times|five times|several times|multiple times|a few times|(?:two|three|four|five|several|multiple|a few|so many|too many)\\s+(?:earlier\\s+|prior\\s+|previous\\s+|unanswered\\s+)?(?:notes|mails|emails|messages|times|nudges|follow[- ]?ups))\\b|\\b(?:two|three|four|five|several|multiple)\\s+(?:earlier\\s+|prior\\s+|previous\\s+|unanswered\\s+)?(?:notes|mails|emails|messages|nudges|follow[- ]?ups)\\b(?:[^.\\n]{0,40}\\b(?:from me|of mine|I have sent|I sent|to you|reached|landed)\\b)?",
+   "message": "States how many mails I have already sent. Same ledger effect as an ordinal.",
+   "examples_block": [
+    "I have written to Prime Video twice already",
+    "Three mails from me have now reached Akasa Air",
+    "Several notes from me have landed in your inbox",
+    "Four notes to BrowserStack is more than I would normally send"
+   ],
+   "examples_pass": [
+    "I wrote to you once in early July and this note is short."
+   ]
+  },
+  {
+   "id": "T01_FINALITY",
+   "family": "COUNTING",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\b(?:final|last)\\s+(?:note|mail|email|message|nudge|attempt|follow[- ]?up|word)\\b|\\b(?:this is|this will be|treat this as|please treat this as|will treat this as|make (?:it|this))\\s+(?:my\\s+)?(?:the\\s+)?(?:final|last)\\s+(?:one|note|mail|email|message|time)\\b|\\b(?:the|my)\\s+(?:last|final)\\s+(?:one|time)\\b(?![^.\\n]{0,20}\\b(?:we spoke|we met|I was)\\b)",
+   "message": "Announces this is the last/final note. Only lands if the recipient already carries the count of the previous ones; it converts a close into a guilt device.",
+   "examples_block": [
+    "Fourth and final note from me",
+    "Last note from me",
+    "this is my last note to Peeko",
+    "please treat this as the third and last note"
+   ],
+   "examples_pass": [
+    "A short note to close from my side, and nothing is needed in return."
+   ]
+  },
+  {
+   "id": "T01_SILENCE_ELAPSED",
+   "family": "COUNTING",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\b(?:not|never|haven'?t|have not|hadn'?t|had not|didn'?t|did not)\\s+(?:yet\\s+)?(?:heard|received|had|got|gotten|seen)\\s+(?:back|a reply|a response|anything|any (?:reply|response|word)|word|from you)\\b|\\bno\\s+(?:reply|response|word|answer)\\s+(?:yet|so far|since|from you|to (?:my|the) (?:earlier|previous|last|first) (?:note|mail|email))\\b|\\b(?:did not|didn'?t|never|has not|hasn'?t) (?:reply|replied|respond|responded|answer|answered|write back|written back|come back)\\b|\\bunanswered\\b|\\bwithout (?:a |any )?(?:reply|response|word|answer)\\b|\\bgone (?:quiet|silent|unanswered)\\b|\\b(?:weeks?|months?|days?) of silence\\b|\\bstill waiting\\b|\\bwaiting (?:to hear|for (?:a|your) (?:reply|response|word))\\b|\\bsilence\\b",
+   "message": "Frames the recipient's silence as a fact to be explained. Non-response is the answer; naming it is a reproach.",
+   "examples_block": [
+    "as I have not yet heard back",
+    "Two earlier mails to Praxis have gone unanswered",
+    "three months of silence"
+   ],
+   "examples_pass": [
+    "I wrote in May about growth roles at Coursera; here is the shorter version."
+   ]
+  },
+  {
+   "id": "T02_DEMAND_REJECTION",
+   "family": "DEMAND_LABOUR",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\b(?:a|an|just a|even a|only a|simply a|your)\\s+(?:clear|plain|simple|quick|short|straight|honest|direct|flat|one[- ]line|one line|single line|single[- ]word|one[- ]word|two[- ]word)\\s+(?:no|yes or no|answer|reply|response)\\b|\\brather\\s+(?:hear|have|get|receive|be told|know|take)\\b[^.\\n]{0,40}?\\bno\\b|\\b(?:tell(?:ing)?|telling) me to stop\\b|\\btold to stop\\b|\\b(?:please|do|just|simply)\\s+(?:do\\s+)?say (?:so|no)\\b|\\bsay(?:ing)? (?:so|no) (?:is|would be) (?:fine|enough|helpful|useful|welcome|okay|ok)\\b|\\bone line (?:saying|telling|to say)\\b|\\bif (?:the answer|it) is (?:simply |just )?(?:a )?no\\b|\\ba (?:no|decline|rejection) (?:is|would be|from you is) (?:also |just as |equally |completely |perfectly |genuinely )?(?:fine|okay|ok|enough|helpful|useful|welcome|good)\\b|\\bno (?:explanation|reason) (?:is )?(?:needed|required)\\b|\\bclose(?:s)? (?:it|the loop|this) (?:cleanly|for me|on my side)\\b|\\bso (?:that )?I can (?:stop|close|move on|stop writing|stop wondering|stop guessing)\\b|\\bkeep (?:guessing|wondering|writing|asking|adding|nudging)\\b|\\bstop (?:guessing|wondering)\\b|\\bI will not take it badly\\b|\\bno hard feelings\\b|\\bwill not hold it against\\b",
+   "message": "Asks the recipient to produce a rejection or to labour to release me. It transfers my closure problem onto them.",
+   "examples_block": [
+    "I would rather hear a clear no than keep writing",
+    "a one-line no would close it cleanly",
+    "please do say so if nothing is open",
+    "no explanation is needed if the answer is simply no",
+    "one line telling me to stop is completely fine"
+   ],
+   "examples_pass": [
+    "If you are able to point me toward the right person, I would be grateful for the guidance.",
+    "Thank you for the quick reply and for the offer to refer."
+   ]
+  },
+  {
+   "id": "T02_GREAT_DEAL",
+   "family": "DEMAND_LABOUR",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\bwould (?:help|mean|matter)\\s+(?:me\\s+)?(?:a great deal|a lot|so much|the world|enormously|hugely|immensely|more than you know)\\b|\\bwould (?:be|go) a long way\\b|\\bmeans? (?:a lot|the world|so much) to me\\b|\\bwould (?:really|genuinely|truly|hugely|greatly) (?:help|matter)\\b",
+   "message": "Turns a small favour into a large emotional debt ('a pointer would help a great deal'). Reads as demanding labour under a polite surface.",
+   "examples_block": [
+    "a pointer would help a great deal",
+    "Any guidance would mean a great deal",
+    "would go a long way"
+   ],
+   "examples_pass": [
+    "I would value a steer on who looks at growth hiring, if that is easy to share."
+   ]
+  },
+  {
+   "id": "T02_IMPERATIVE_DEMAND",
+   "family": "DEMAND_LABOUR",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\b(?:please|kindly)\\s+(?:do\\s+)?(?:revert|respond|reply|advise|confirm|update me|let me know|get back|share|forward|refer|connect me|arrange|schedule|acknowledge|do the needful)\\b|\\bdo the needful\\b|\\bawait(?:ing)? your (?:reply|response|revert|confirmation)\\b|\\bexpect(?:ing)? (?:a |your )?(?:reply|response|answer|revert)\\b|\\brequest you to\\b|\\bI request\\b|\\bI (?:urge|insist|need you to|would need)\\b|\\bat your earliest\\b|\\byour (?:prompt|early|quick|swift) (?:reply|response|revert|attention)\\b|\\brevert\\b",
+   "message": "Imperative or expectation framing ('please revert', 'awaiting your response'). Ishani named this exactly: 'expectation of action rather than a request for guidance'.",
+   "examples_block": [
+    "Kindly revert at your earliest",
+    "Please let me know",
+    "Awaiting your response"
+   ],
+   "examples_pass": [
+    "If you are able to share a steer on who owns this hire, I would be grateful. Thank you for your time."
+   ]
+  },
+  {
+   "id": "T03_DEBT_FRAMING",
+   "family": "DEBT_FRAMING",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\bleave the thread (?:sitting|hanging|open|there)\\b|\\bsitting (?:there|in your inbox|unanswered|idle)\\b|\\brather than (?:leave|let)\\b[^.\\n]{0,40}\\b(?:sit|sitting|hang|hanging|go quiet|lapse|die|stand)\\b|\\bthread (?:go|went|goes) quiet\\b|\\bresurface\\b|\\bre-?surface my interest\\b|\\bback on your (?:desk|radar|list)\\b|\\bput (?:it|this|myself) back\\b|\\bbump(?:ing)? this\\b|\\bcircling back\\b|\\bcircle back\\b|\\bchecking in\\b|\\bcheck in\\b|\\bfollowing up on\\b|\\bfollow(?:ing)? up (?:on|to) my\\b|\\bjust following up\\b|\\bwanted to (?:bump|nudge|follow up|check in|resurface|reconnect)\\b|\\bgentle (?:nudge|reminder|bump|follow[- ]?up)\\b|\\bgently (?:nudge|remind|resurface|bump)\\b|\\bfriendly reminder\\b|\\bquick reminder\\b|\\breminder\\b|\\bnot (?:asking|expecting) (?:anyone|you) to revisit\\b|\\bI am not asking (?:for it|anyone) to be revisited\\b|\\bowe(?:d|s)?\\b|\\bnothing is owed\\b|\\bnot to be a nuisance\\b|\\bbe(?:come|coming)? (?:a )?(?:nuisance|noise|a pest|a bother)\\b|\\bpester(?:ing)?\\b|\\bpushing it\\b|\\bpushing my luck\\b|\\b(?:sorry|apolog(?:y|ies|ise|ize|izing|ising)) (?:for|about) (?:the )?(?:persistence|persisting|writing again|another (?:note|mail|email)|the (?:fourth|third|second|repeat|extra|additional|number of|volume)|chasing|the chase|nagging|the nudge|bothering you again)\\b|\\bI know (?:that )?(?:this|that) is a lot\\b|\\bwhich I realise is a lot\\b|\\bmore than I would normally send\\b|\\bconscious (?:that )?this is\\b|\\baware (?:that )?this is\\b[^.\\n]{0,15}\\b(?:note|mail|email|time)\\b|\\bI do not want to (?:be|become)\\b|\\bnot want(?:ing)? to (?:be|become) (?:a )?(?:nuisance|noise|pest|bother)\\b|\\bat the risk of (?:repeating|being|becoming|over)\\b|\\bI will (?:not|never) write again\\b|\\bwon'?t write again\\b|\\bwill stop (?:here|writing|now)\\b|\\bI will stop\\b|\\bstop here\\b|\\bleave it (?:here|there|at that)\\b|\\bleave the decision with you\\b|\\bregardless of (?:what|the answer)\\b|\\bwhatever the answer\\b|\\bwhere I stop\\b|\\bthis is where I (?:stop|leave it|sign off)\\b",
+   "message": "Frames my persistence as a burden the recipient has caused or must relieve (apology-as-pressure, 'I will stop', 'not to be a nuisance', 'sitting there', 'resurface'). It centres my sequence, not their choice.",
+   "examples_block": [
+    "I would rather restate the point than leave the thread sitting there",
+    "wanted to gently resurface my interest",
+    "I do not want to become noise in your inbox",
+    "My apologies for the fourth note",
+    "I will not write again after this one",
+    "Following up on my earlier note",
+    "so this is where I stop, and a one-line no would be genuinely useful"
+   ],
+   "examples_pass": [
+    "I wrote in July about growth roles at HP; one thing since then that may be more useful than the original note."
+   ]
+  },
+  {
+   "id": "T04_BOILERPLATE_CREDS",
+   "family": "REPEAT_CREDS",
+   "severity": "block",
+   "applies_to": [
+    "followup",
+    "final"
+   ],
+   "flags": "i",
+   "pattern": "\\bWhere I am today\\s*:|\\b(?:a )?quick (?:reminder|recap|summary|restatement) (?:of|on) (?:my|the) fit\\b|\\bquick recap is in order\\b|\\brecap of fit\\b|\\bwhy I think there is a fit\\b|\\bwhy I believe I am a strong fit\\b|\\bto (?:restate|reiterate|recap) (?:my|the) (?:fit|background|profile|interest|point)\\b|\\bre-?stat(?:e|ing) the point\\b|\\bhere is the (?:shorter|short|compressed|condensed) version\\b|\\bthe short version\\b|\\bthe compressed version\\b|\\bin shorter form\\b|\\bsame request\\b|\\bhas not changed\\b|\\bremain(?:s)? (?:keen|interested|unchanged)\\b|\\bmy interest\\b[^.\\n]{0,30}\\b(?:has only grown|has grown|remains|is unchanged|has not changed|has not moved|still stands|stands)\\b|\\b(?:interest|request|ask) has not moved\\b",
+   "message": "Announces a repeat of the credential block. Same pitch again signals automation and reads as spam pressure; a follow-up earns its place only with something new.",
+   "examples_block": [
+    "Where I am today:",
+    "A quick reminder of my fit:",
+    "I would rather restate the point",
+    "here is the compressed version",
+    "my interest in noon has only grown",
+    "and the interest has not moved"
+   ],
+   "examples_pass": [
+    "One thing since my July note that may be more useful than the original pitch:"
+   ]
+  },
+  {
+   "id": "T04_RESTATED_INTEREST",
+   "family": "REPEAT_CREDS",
+   "severity": "warn",
+   "applies_to": [
+    "followup",
+    "final"
+   ],
+   "flags": "i",
+   "pattern": "\\bremain(?:s)?\\s+(?:very|genuinely|extremely|highly|really|most)\\s+(?:keen|interested|excited)\\b",
+   "message": "Restates interest that is already on the record. T04 misses this because an adverb breaks its pattern; the 2026-10-20 batch used \"I remain very interested\". WARN not block, since the suite blesses a clean mail containing \"remain genuinely interested\".",
+   "examples_block": [
+    "Where I am today:",
+    "A quick reminder of my fit:",
+    "I would rather restate the point",
+    "here is the compressed version",
+    "my interest in noon has only grown",
+    "and the interest has not moved"
+   ],
+   "examples_pass": [
+    "One thing since my July note that may be more useful than the original pitch:"
+   ]
+  },
+  {
+   "id": "T06_URGENCY_AVAILABILITY",
+   "family": "URGENCY",
+   "severity_by_touch": {
+    "initial": "warn",
+    "followup": "block",
+    "final": "block",
+    "reply": "warn"
+   },
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\bavailable (?:to (?:start|join) )?(?:immediately|right away|at once|straight away|from (?:tomorrow|next week|monday))\\b|\\bimmediate(?:ly)? (?:available|availability|joiner|start|joining|notice)\\b|\\bcan (?:start|join) (?:immediately|right away|from tomorrow|next week|at short notice)\\b|\\bavailable to start\\b|\\bready to (?:start|join) (?:immediately|right away|now)\\b|\\bASAP\\b|\\bat the earliest\\b|\\bas soon as possible\\b|\\burgent(?:ly)?\\b|\\brare window\\b|\\bwindow (?:is )?(?:closing|open)\\b|\\btime[- ]sensitive\\b|\\bbefore (?:the )?(?:deadline|it closes|the window)\\b|\\bthis week if possible\\b|\\bwithin the (?:week|next few days)\\b|\\bat speed\\b",
+   "message": "Transfers my timeline onto the recipient ('available immediately' used as a call to action). Availability belongs on the resume, not in the ask.",
+   "examples_block": [
+    "IIM Kozhikode MBA, based in Gurugram, available immediately.",
+    "Based in Gurgaon and available to start immediately.",
+    "creates a rare window for operators"
+   ],
+   "examples_pass": [
+    "Based in Gurugram."
+   ]
+  },
+  {
+   "id": "T05_STACKED_ASK_OR",
+   "family": "ESCALATION",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\b(?:anything (?:open|live|relevant|suitable)|an? (?:role|seat|opening|position)\\b[^.?!\\n]{0,20}\\b(?:open|live|relevant|suitable|feels right)|refer(?:ral|ring)? me|a referral|referral for|introduc(?:e|tion)|connect me|forward (?:my|this|the)|share (?:my|this|the) (?:resume|cv|profile|details|name)|point(?:er|ing)? (?:me )?(?:to|towards)|the right (?:person|owner|contact|team)|better person|any guidance|guidance|a steer|15 minutes|quick call|a (?:short|quick|brief) (?:call|chat|conversation)|calendly|schedule)\\b[^.?!\\n]{0,80}\\b(?:,? or |, and if not,? |; if not,? | or (?:else|failing that|otherwise) | or even )\\b[^.?!\\n]{0,80}\\b(?:refer(?:ral|ring)? me|a referral|referral|introduc(?:e|tion)|connect me|forward|share (?:my|this|the)|point(?:er|ing)?|the right (?:person|owner|contact|team)|better person|guidance|a steer|15 minutes|call|chat|conversation|calendly|schedule|owner|help just as much|would help)\\b",
+   "message": "Two asks joined by 'or' / 'and if not' in one sentence (refer me OR point me to the owner OR guidance). A menu of asks is an escalation, not a softening: the recipient now owes one of three things.",
+   "examples_block": [
+    "If a Growth, GTM, or Strategy seat feels right, I would be grateful for a referral, and if not, a pointer to the right owner or any guidance would help just as much.",
+    "If there is anything open at the Manager or Senior Manager level, or a better person for me to speak with, a pointer would help a great deal.",
+    "Would you be open to referring me, or pointing me to the right person on the team?"
+   ],
+   "examples_pass": [
+    "If it is appropriate for you to refer, I would be very grateful. Thank you for your time."
+   ]
+  },
+  {
+   "id": "T07_FACT_15CR",
+   "family": "FACT",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "(?:Rs\\.?|INR|₹)\\s*15\\s*Cr\\b|\\b15\\s*Cr(?:ore)?\\b|\\b0 to (?:Rs\\.?|₹)?\\s*15\\b",
+   "message": "The referral engine reached Rs 1.5 Cr, not Rs 15 Cr. Known 10x overstatement.",
+   "examples_block": [
+    "from 0 to Rs 15 Cr in 4 months",
+    "0 to ₹15 Cr"
+   ],
+   "examples_pass": [
+    "from zero to Rs 1.5 Cr in four months"
+   ]
+  },
+  {
+   "id": "T07_DASH",
+   "family": "FORMAT",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "",
+   "pattern": "[\\u2013\\u2014]",
+   "message": "Em or en dash present. House style forbids them.",
+   "examples_block": [
+    "growth — and P&L"
+   ],
+   "examples_pass": [
+    "growth and P&L"
+   ]
+  },
+  {
+   "id": "T07_SPACED_HYPHEN",
+   "family": "FORMAT",
+   "severity": "warn",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "",
+   "pattern": "(?<=\\s)-(?=\\s)",
+   "message": "ASCII hyphen used as a dash. T07_DASH matches only en and em dashes, so this escaped. Rewrite as a comma or a full stop. WARN not block, because a job title quoted verbatim may legitimately contain \" - \".",
+   "examples_block": [
+    "growth — and P&L"
+   ],
+   "examples_pass": [
+    "growth and P&L"
+   ]
+  },
+  {
+   "id": "T07_EXCLAMATION",
+   "family": "FORMAT",
+   "severity": "warn",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "",
+   "pattern": "!",
+   "message": "Exclamation mark. Reads as forced enthusiasm in cold mail.",
+   "examples_block": [
+    "Thanks!"
+   ],
+   "examples_pass": [
+    "Thank you."
+   ]
+  },
+  {
+   "id": "T07_HI_THERE",
+   "family": "FORMAT",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "^\\s*(?:hi|hello|dear|hey)\\s+(?:there|team|all|sir|madam|sir\\/madam|recruiter|hiring manager)\\b",
+   "message": "Generic salutation. Real first name or do not send.",
+   "examples_block": [
+    "Hi there,"
+   ],
+   "examples_pass": [
+    "Hi Ishani,"
+   ]
+  },
+  {
+   "id": "T07_PLACEHOLDER",
+   "family": "FORMAT",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "",
+   "pattern": "\\[(?:NAME|FIRST_?NAME|COMPANY|ROLE|INSIGHT|PROOF_POINT|FINAL_CTA|SIGNAL|NEW_INFO|LINK|URL|X|TBD|INSERT[^\\]]*)\\]|\\{\\{[^}]+\\}\\}|<<[^>]+>>",
+   "message": "Unfilled placeholder token.",
+   "examples_block": [
+    "Hi [NAME],"
+   ],
+   "examples_pass": [
+    "Hi Ishani,"
+   ]
+  },
+  {
+   "id": "T07_PRESUMED_ACTION",
+   "family": "ESCALATION",
+   "severity": "warn",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\bso (?:it is|that it is|it's) easy to forward\\b|\\bfor (?:easy|onward) forwarding\\b|\\bplease forward\\b|\\bfeel free to forward\\b|\\bpass (?:it|this|my (?:resume|cv|profile)) (?:on|along)\\b|\\bschedule a call\\s*:|\\bbook (?:a|some) time\\b|\\bpick a slot\\b|\\bgrab (?:15|20|30) minutes\\b",
+   "message": "Presumes the recipient will act (forward the CV, book a slot). Guidance framing leaves the action with them.",
+   "examples_block": [
+    "I am attaching my resume so it is easy to forward.",
+    "Schedule a call: https://calendly.com/..."
+   ],
+   "examples_pass": [
+    "My resume is attached in case it is useful."
+   ]
+  },
+  {
+   "id": "T07_PS_LINE",
+   "family": "ESCALATION",
+   "severity_by_touch": {
+    "initial": "warn",
+    "followup": "block",
+    "final": "block",
+    "reply": "warn"
+   },
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "im",
+   "pattern": "^\\s*\\*?P\\.?S\\.?\\*?\\s*[:.-]",
+   "message": "P.S. line. In cold mail it is a second hook and usually a second ask.",
+   "examples_block": [
+    "P.S. Noon Minutes launching into ultra-fast delivery..."
+   ],
+   "examples_pass": []
+  },
+  {
+   "id": "T07_FACT_DRIFT_COMPLAINT",
+   "family": "FACT",
+   "severity": "warn",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "flags": "i",
+   "pattern": "\\b74\\s*%|\\bcomplaint rate (?:cut|reduced|down) by 74\\b|\\bin a month by adding structure\\b",
+   "message": "Claim drift: gmail-apps-script/Config.gs GAURAV_ACHIEVEMENT_BANK says complaint rate cut 94% across 121K orders in 2.5 weeks; the Downloads mailer says 74% in a month. Sent mail now carries both. Pick one canonical figure and retire the other.",
+   "examples_block": [
+    "complaint rate cut by 74% across 121K orders in a month by adding structure"
+   ],
+   "examples_pass": [
+    "cut complaint rate by 94% across 121K orders"
+   ]
+  }
+ ],
+ "ask_detection": {
+  "description": "A sentence counts as an ask if it is a question aimed at the recipient or contains an ask verb/noun. Used for max_asks, final_no_ask, and escalation checks.",
+  "flags": "i",
+  "ask_patterns": [
+   "\\?\\s*$",
+   "\\b(?:would|could|can|will|might) you\\b",
+   "\\b(?:are|were) you (?:open|able|willing|free|available)\\b",
+   "\\bopen to (?:a |an )?(?:call|chat|conversation|referral|referring|intro|introduction|connect|sharing|pointing|passing)\\b",
+   "\\brefer(?:ral|ring)? me\\b|\\ba referral\\b(?! (?:funnel|engine|channel|program|programme|loop|system|pipeline|scheme|model|flow))|\\breferral for\\b(?! (?:new|existing|users|customers|learners))|\\brefer me\\b|\\bbe (?:referred|considered)\\b|\\bconsider(?:ed|ing)? me\\b|\\bput (?:my name|me) forward\\b|\\bkeep me in mind\\b|\\bkept on file\\b|\\bcame to mind\\b",
+   "\\bintroduce me\\b|\\ban introduction (?:to|would|from)\\b|\\bmake (?:an|the) introduction\\b|\\b(?:open to|mind) (?:making )?(?:an )?introduc(?:ing|tion)\\b|\\bconnect me\\b|\\bconnect(?:ing)? (?:me )?with\\b|\\bput me in touch\\b|\\bpoint(?:er|ing)? (?:me )?(?:to|towards)\\b|\\ba pointer\\b|\\bthe right (?:person|owner|contact|team)\\b|\\bbetter person\\b|\\bwho(?:m)? (?:I should|to) (?:speak|talk|write) (?:to|with)\\b|\\bwho (?:looks at|owns|handles|leads|runs)\\b",
+   "\\b(?:any|some|your|a (?:bit|word|line) of|a little) (?:guidance|advice|steer|direction|pointers?)\\b|\\b(?:would (?:value|welcome|appreciate|be grateful for|be glad of)|grateful for|glad of) (?:a |any |your |some )?(?:guidance|advice|steer|pointer|thoughts|view|read|take|perspective|direction)\\b|\\b(?:guidance|advice|a steer|steer|thoughts|your view|your take|your read) on\\b|\\bwhat you (?:think|would suggest|would recommend|would advise)\\b|\\bif you (?:think|feel|see|would suggest)\\b|\\bwould you (?:suggest|recommend|advise)\\b|\\bany (?:suggestion|recommendation)s?\\b",
+   "\\b(?:15|20|30)[- ]min(?:ute)?s?\\b|\\bquick call\\b|\\ba (?:short|quick|brief) (?:call|chat|conversation|word)\\b|\\bcalendly\\b|\\bschedule\\b|\\bbook (?:a|some) time\\b|\\bhop on a call\\b|\\bcompare notes\\b|\\btime to (?:talk|chat|speak|connect)\\b|\\b(?:speak|talk|chat|connect) (?:sometime|briefly|for a few minutes)\\b",
+   "\\bforward (?:my|this|the)\\b|\\bshare (?:my|this|the) (?:resume|cv|profile|details|name)\\b|\\bpass (?:it|this|my)\\b|\\bflag (?:me|my|this)\\b",
+   "\\bI would (?:value|welcome|appreciate|be grateful for|love|be glad of|be glad to have)\\b",
+   "\\bgrateful (?:for|if)\\b|\\bappreciate (?:it )?if\\b|\\bthankful (?:for|if)\\b",
+   "\\b(?:let me know|tell me|advise|confirm|update me|revert|get back)\\b",
+   "\\bif (?:there is|there's|anything|any) (?:anything|a role|a seat|an opening|something)\\b[^.?!\\n]{0,60}\\b(?:open|live|relevant|suitable|coming up|in the pipeline)\\b"
+  ],
+  "release_patterns": [
+   "\\bno (?:further |additional )?(?:reply|response|answer|action|need to reply|need to respond|need to write back|need to (?:reply|respond))\\s*(?:is\\s*)?(?:needed|required|necessary|expected)\\b",
+   "\\bno need to (?:reply|respond|write back|answer|act|do anything)\\b",
+   "\\bplease (?:feel free to )?ignore (?:this|it)\\b|\\bfeel free to ignore\\b|\\bhappy for you to ignore\\b|\\bsafe to ignore\\b|\\bsimply ignore\\b|\\bjust ignore\\b",
+   "\\bif (?:nothing|none of this|this|it) is (?:not )?relevant\\b[^.?!\\n]{0,40}\\b(?:ignore|no reply|no response|no need|leave it|no action)\\b",
+   "\\bnothing (?:is )?(?:needed|required|expected) (?:from your side|from you|in return|back|here)\\b|\\bnothing (?:for you )?to do\\b|\\bno (?:further |additional )?action (?:is |will be )?(?:needed|required)\\b",
+   "\\bif not,? (?:please )?(?:ignore|no reply|no response|no need|leave it|no worries|that is (?:completely )?(?:fine|okay))\\b",
+   "\\bentirely (?:your call|up to you|at your discretion)\\b|\\bat your discretion\\b",
+   "\\bno further action\\b",
+   "\\byou need not (?:reply|respond|write back|answer|do anything)\\b",
+   "\\bno obligation to (?:reply|respond|answer)\\b|\\bdo not feel obliged to (?:reply|respond)\\b"
+  ]
+ },
+ "structural_rules": [
+  {
+   "id": "S01_MAX_ASKS",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "reply"
+   ],
+   "param": 1,
+   "message": "More than one ask in a single mail. One ask, optional, ignorable."
+  },
+  {
+   "id": "S02_FINAL_NO_ASK",
+   "severity": "block",
+   "applies_to": [
+    "final"
+   ],
+   "param": 0,
+   "message": "The final touch must ask for nothing and give the recipient nothing to do."
+  },
+  {
+   "id": "S03_RELEASE_TAIL_BANNED",
+   "severity_by_touch": {
+    "initial": "block",
+    "followup": "block",
+    "final": "block",
+    "reply": "block"
+   },
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "message": "A release tail is present (\"no reply is needed\", \"please ignore this\", \"no further action\", \"nothing is needed from you\"). These are BANNED. End with plain thanks instead.",
+   "retired_id": "S03_ASK_NEEDS_RELEASE",
+   "changed": "2026-08-26: INVERTED. The release was required from 2026-08-18 and had hardened into a formula that read as one. User instruction 2026-08-21: \"stop adding lines around 'No further action needed' across ever\". The ask stays optional and ignorable in its FRAMING (guidance they may decline), which S01/S06/T02 enforce; it is no longer made optional by an explicit disclaimer."
+  },
+  {
+   "id": "S04_FOLLOWUP_NEEDS_NEW_INFO",
+   "severity": "block",
+   "applies_to": [
+    "followup",
+    "final"
+   ],
+   "message": "Follow-up carries no concrete new data point since the last mail (ctx.new_info missing or its text absent from the body). Skip the send; do not pad."
+  },
+  {
+   "id": "S05_REPEAT_SENTENCES",
+   "severity": "block",
+   "applies_to": [
+    "followup",
+    "final"
+   ],
+   "param": {
+    "min_words": 8,
+    "max_repeated_sentences": 1
+   },
+   "message": "Sentence(s) repeated verbatim from a previous outbound in this thread. Same credential block again signals automation."
+  },
+  {
+   "id": "S06_ESCALATING_ASK",
+   "severity": "warn",
+   "applies_to": [
+    "followup"
+   ],
+   "message": "This touch asks more than the previous one. Asks must shrink across touches, never grow."
+  },
+  {
+   "id": "S07_MAX_WORDS",
+   "severity_by_touch": {
+    "initial": "warn",
+    "followup": "block",
+    "final": "block",
+    "reply": "warn"
+   },
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "param": {
+    "initial": 220,
+    "followup": 120,
+    "final": 90,
+    "reply": 200,
+    "followup_with_role_block": 170,
+    "final_with_role_block": 130,
+    "role_block_marker": "https?://\\S*(?:linkedin\\.com/jobs/view|amazon\\.jobs/|/careers?/|/jobs?/|greenhouse\\.io|lever\\.co|myworkdayjobs\\.com|boards\\.|jobs\\.)"
+   },
+   "message": "Over the word budget for this touch kind (body only, signature excluded). A follow-up or final that carries a live requisition link (role block) gets the *_with_role_block budget; URLs count as one word each."
+  },
+  {
+   "id": "S08_TOUCH_CAP",
+   "severity": "block",
+   "applies_to": [
+    "followup",
+    "final"
+   ],
+   "param": 6,
+   "message": "This mail would exceed the hard cap of 6 total touches per contact across BOTH mailboxes. Do not draft.",
+   "changed": "2026-09-10: raised 3 -> 6 per the user-mandated PERMANENT change of 2026-09-08"
+  },
+  {
+   "id": "S09_SUPPRESSED",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final"
+   ],
+   "message": "Recipient (or their org) is on the suppression list (negative reply / tone flag / no openings). Do not draft."
+  },
+  {
+   "id": "S10_ORG_LOAD",
+   "severity": "warn",
+   "applies_to": [
+    "initial",
+    "followup"
+   ],
+   "param": {
+    "max_humans_per_org_30d": 12
+   },
+   "message": "This org has already received cold sequences to many humans in the last 30 days. Recipients talk to peers; org saturation is one reputation event, not N mails."
+  },
+  {
+   "id": "S11_DRAFT_AGE",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final"
+   ],
+   "param": {
+    "max_age_days": 7
+   },
+   "message": "Draft is older than 7 days. Its 'new information' and thread state are stale; delete and redraft rather than bulk-send."
+  },
+  {
+   "id": "S12_ROLE_TITLE_VERBATIM",
+   "severity": "block",
+   "applies_to": [
+    "initial",
+    "followup",
+    "final",
+    "reply"
+   ],
+   "param": {
+    "registry": "roles_registry.json"
+   },
+   "message": "A role posting URL appears in the body, but the role title next to it does not match roles_registry.json title_posted for that URL (or the URL is not in the registry). Job titles must be copied verbatim from the posting; product or team names belong in the fit bullets, never in the title or the subject."
+  }
+ ],
+ "llm_check": {
+  "enabled": true,
+  "model_hint": "claude-sonnet-4-5 or later; temperature 0",
+  "block_on": [
+   "demanding",
+   "counts_touches",
+   "asks_for_rejection",
+   "debt_framing"
+  ],
+  "prompt": "You are auditing ONE outbound email from a job-seeker to a professional contact who has not replied (or has replied). Read it as the busy recipient would. Return strict JSON only: {\"register\": \"exploratory\"|\"neutral\"|\"demanding\", \"counts_touches\": bool, \"asks_for_rejection\": bool, \"debt_framing\": bool, \"stacked_asks\": bool, \"urgency_transfer\": bool, \"ask_count\": int, \"quotes\": [\"verbatim phrase\", ...], \"one_line_reason\": \"...\"}. Definitions: counts_touches = the mail references how many times the sender has written or how long the recipient has been silent, or announces this is the last/final note; asks_for_rejection = it asks the recipient to say no / tell them to stop / give a one-line answer so the sender can close; debt_framing = it presents the recipient's silence or the sender's persistence as something the recipient must relieve (apology-as-pressure, 'not to be a nuisance', 'sitting there', 'resurface'); stacked_asks = more than one distinct request (referral OR pointer OR guidance OR call); urgency_transfer = availability/immediacy used as a call to action; register: 'demanding' if a reasonable senior recipient could read it as an expectation of action rather than a request for guidance. Quote the exact words that drove each true flag. Be strict: two real recipients recently flagged mails that were polite on the surface.",
+  "output_schema": {
+   "register": "string",
+   "counts_touches": "boolean",
+   "asks_for_rejection": "boolean",
+   "debt_framing": "boolean",
+   "stacked_asks": "boolean",
+   "urgency_transfer": "boolean",
+   "ask_count": "integer",
+   "quotes": "array",
+   "one_line_reason": "string"
+  }
+ },
+ "signature_markers": [
+  "Warm regards,",
+  "Regards,",
+  "Best,",
+  "Thanks,",
+  "Thank you,",
+  "Best regards,",
+  "Gaurav Rathore\n",
+  "\nGaurav\n"
+ ],
+ "notes": [
+  "severity 'block' means the draft must not be created; 'warn' is logged and surfaced but does not block.",
+  "applies_to selects touch kinds. When the caller cannot say which kind it is, pass 'followup' for anything in an existing thread and 'initial' otherwise; the gate reports which kind it assumed.",
+  "S04 and S08 and S09 need context (new_info text, touch number, suppression list). Without context they are reported as UNCHECKED, never silently passed.",
+  "1.2.0: S07 gains followup_with_role_block=170 / final_with_role_block=130 when the body carries a requisition URL (role_block_marker). Reason: the pointer-format referral note (role block + 3 fit bullets + one released ask) is structurally longer than a prose nudge but carries only one ask; the 120 budget was forcing prose. T04 unchanged: \"why I believe I am a strong fit\" stays blocked as a credential-recap marker; use \"Why I believe it fits\" header only above specifics tied to the JD.",
+  "1.3.0: S12_ROLE_TITLE_VERBATIM added after the 'Pocket Toons' defect (2026-08-19): a product name from the JD body was promoted into the job title and into a subject line across 48 drafts. Role facts now live in roles_registry.json with title_posted copied verbatim from the posting plus source_url/verified_on/verified_by; the gate blocks any body whose posting URL is absent from the registry or whose title does not match.",
+  "1.4.0: S03 INVERTED and renamed S03_ASK_NEEDS_RELEASE -> S03_RELEASE_TAIL_BANNED. It now BLOCKS when a release tail is present, on every touch kind including final, instead of blocking when one is absent. Renamed on purpose so that stale OVR lists naming the old id cannot silently swallow it. release_patterns are unchanged and now serve as the ban list.",
+  "1.4.1: release_patterns widened. \"No further action is needed\" (the phrase the user named verbatim) matched NOTHING: \"no action ... needed\" required adjacency and \"further\" split it. Added optional further/additional, a literal \"no further action\", and the need-not / no-obligation family."
+ ],
+ "_vendored_from": "automail-pipeline/tone/tone_gate_rules.json",
+ "_vendored_at": "2026-09-10",
+ "_note": "Vendored so the cloud runner has no cross-repo dependency. The canonical copy lives in automail-pipeline. Re-vendor when that version changes; the version field below is the drift check.",
+ "_changelog": [
+  "1.5.1 2026-10-21: T04 tolerated an adverb (\"I remain very interested\" escaped). Added T07_SPACED_HYPHEN as warn, since T07_DASH only matched U+2013/U+2014 and the 2026-10-20 batch used ASCII \" - \". Both misses were reproduced before the change."
+ ]
+}

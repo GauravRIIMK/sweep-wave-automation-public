@@ -1,0 +1,92 @@
+name: Create reply drafts with resume
+
+# Manual only, never scheduled. It writes in-thread replies to real people from a file of
+# hand-authored bodies, each one carrying assets/Gaurav_Rathore_Resume.pdf.
+#
+# WHY: replies used to be written straight into Gmail through the MCP connector, which
+# cannot attach a file. In this mailbox that is not cosmetic. The owner's Android client
+# dispatches drafts by itself within minutes, so a draft here is effectively a send, and
+# on 2026-09-18 twelve replies left with no CV behind them. This is the path that cannot
+# do that: create_reply_draft raises rather than build a message without the PDF.
+#
+# The bodies are used VERBATIM. Nothing in this workflow writes or edits copy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      payloads:
+        description: "Path to the reply bodies, e.g. state/reply_payloads.json"
+        type: string
+        default: "state/reply_payloads.json"
+      dry_run:
+        description: "Run every guard and report, create nothing"
+        type: boolean
+        default: true
+
+concurrency:
+  # Shares the drafts-folder group with the daily batch and the rebuild: all three write
+  # into the same folder, and a rebuild that trashes a draft mid-create is the worst case.
+  group: outreach-drafts
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  replies:
+    runs-on: ubuntu-latest
+    # A handful of replies, each costing a thread read plus a 400KB multipart create.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Create reply drafts
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+        run: |
+          python -m pipeline.make_replies \
+            --payloads "${{ inputs.payloads }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Commit report
+        if: always()
+        run: |
+          git config user.name "outreach-bot"
+          git config user.email "actions@github.com"
+          git add state/ || true
+          if git diff --staged --quiet; then echo "no state changes"; exit 0; fi
+          git commit -q -m "replies: $(date -u +%Y-%m-%dT%H:%MZ)"
+          ok=0
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then ok=1; break; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::The reply report could not be pushed. The created draft ids are only in this run's log; recover them from there."
+            exit 1
+          fi
+
+      - name: Job summary
+        if: always()
+        run: |
+          F="state/replies-$(date -u +%Y-%m-%d).json"
+          echo "## Reply drafts $(date -u +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
+          if [ -f "$F" ]; then
+            python - "$F" >> $GITHUB_STEP_SUMMARY <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1],encoding="utf-8"))
+          s=r.get("summary",{})
+          print(f"- created: **{s.get('created',0)}**  skipped: {s.get('skipped',0)}  errors: {s.get('errors',0)}")
+          for c in (r.get("created") or []): print(f"  - {c['to']}")
+          for x in (r.get("skipped") or []): print(f"  - SKIPPED {x['to']}: {x['reason']}")
+          PY
+          else
+            echo "No report written." >> $GITHUB_STEP_SUMMARY
+          fi

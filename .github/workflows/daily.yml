@@ -1,0 +1,241 @@
+name: Daily outreach batch
+
+on:
+  schedule:
+    # A LADDER, NOT A TIME. GitHub does not run these when they say; it defers them under
+    # load and sometimes drops one entirely, with no entry in the Actions history. That is
+    # not a theory here, it is the measured record of 16 consecutive scheduled runs:
+    #
+    #   late by:  min 221m   p25 282m   median 296m   p75 309m   max 414m
+    #
+    # Sixteen out of sixteen were late. Not one fired on time. So a single cron is a bet on
+    # the median, and the spread is three hours wide. Instead there are several primary
+    # attempts, and the FIRST one that actually executes does the day's work: every later
+    # one reads meta.last_run_date, finds the day already done, and exits 0 as a no-op
+    # costing about a minute of runner time. That converts a three-hour spread and an
+    # occasional dropped slot from "no drafts today" into "drafts slightly later".
+    #
+    # Where each slot actually lands, applying the measured spread (IST = UTC+5:30):
+    #   20:13 UTC -> 05:24..08:37 IST, median 06:39   <- the one that should normally win
+    #   22:13 UTC -> 07:24..10:37 IST, median 08:39
+    #   01:13 UTC -> 10:24..13:37 IST, median 11:39   <- the old primary, now the backstop
+    #
+    # An evening slot cannot corrupt the day accounting. utc_date() is read when the job
+    # RUNS, not when it was scheduled, so a 20:13 slot deferred past midnight correctly
+    # counts as the new day. On the rare on-time fire it counts as the previous day, where
+    # the once-a-day guard either no-ops it or, if that day had failed outright, lets it
+    # do the work that was missed. Both outcomes are the ones we want.
+    - cron: "13 20 * * *"
+    - cron: "13 1 * * *"
+    #
+    # CUT FROM FIVE RUNGS TO TWO ON 2026-09-28, on measured billing rather than a guess.
+    # Over the preceding 30 days this workflow billed 1,966 of the account's 2,581 Actions
+    # minutes, and the reason was NOT the no-op design, which works exactly as written
+    # above: 16 no-op runs cost 10 minutes between them, 0.6 min each.
+    #
+    # The cost was that the two TOP-UP rungs were doing real work every single day, not
+    # only on days that fell short. 28 real-work runs over 18 days, 1.56 a day, averaging
+    # 48 minutes each; recent days ran three real passes apiece (09-24: 64+34+15 min,
+    # 09-25: 28+18+13, 09-26: 16+15+14). A top-up that fires daily is not a safety net,
+    # it is a second and third batch.
+    #
+    # What is kept and why: TWO primaries, not one. The deferral spread that motivated the
+    # ladder is real and unchanged (16 of 16 runs late, min 221m, max 414m), so a single
+    # cron is still a bet on the median. The second rung costs 0.6 min on a normal day
+    # because the once-a-day guard no-ops it.
+    #
+    # The interaction with the 200-minute cap below is safe, and it was checked rather
+    # than assumed: meta.last_run_date is written in the persist block at the END of
+    # run_daily, so a run killed at the cap never marks the day done and the 01:13 rung
+    # picks the work up. A truncated long day self-heals; it does not silently vanish.
+    #
+    # Top-up is NOT gone, only unscheduled: run this workflow by hand with top_up=true.
+    # The trade being accepted: a day that falls short now stays short until somebody
+    # asks for the top-up.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Classify and craft but create no drafts"
+        type: boolean
+        default: false
+      limit:
+        description: "Hard cap on drafts this run (0 = use capacity gate)"
+        type: string
+        default: "0"
+      top_up:
+        description: "Create only the shortfall against the daily floor"
+        type: boolean
+        default: false
+      force:
+        description: "Ignore the once-a-day guard (manual catch-up)"
+        type: boolean
+        default: false
+
+# One run at a time, ever. A queued run never overlaps a running one.
+concurrency:
+  group: outreach-daily
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    # 350 -> 200 on 2026-09-28. Be clear about what this does and does not buy: it saves
+    # ZERO minutes today. Billing is actual runtime, never the ceiling, and in 30 days the
+    # longest run of this workflow was 167 minutes. Nothing has ever come within half the
+    # old ceiling. This is a runaway brake, not a savings lever, and it was worth setting
+    # anyway because the failure it guards against is a single job burning 350 minutes.
+    #
+    # 200 is not arbitrary: it is ~20% above the observed maximum of 167. Measured cost is
+    # ~24s per crafted lead, ~9 min discovery, ~2.2s per queued draft in the guard. A kill
+    # degrades gracefully because state flushes every 10 drafts, and because the 01:13
+    # rung re-runs any day that never reached the persist block.
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Re-sync to the branch tip before any state is read
+        run: |
+          # actions/checkout pins github.sha: the tip as of when the run was CREATED,
+          # not when it starts. `concurrency: outreach-daily` with cancel-in-progress
+          # false makes that gap routine, and an overlapping ladder guarantees it.
+          # Measured on run 35568156247: created 06:21:59Z at head_sha c875a29, job
+          # started 07:50:34Z after 88 minutes queued behind a sibling daily run,
+          # checked out 07:50:35 -- six seconds AFTER that run pushed 49938c0
+          # (+175 sent_log rows) -- and took the pinned c875a29 anyway. It then spent
+          # 30 minutes deriving a complete new state from a sent_log missing those
+          # rows. The five-file rebase conflict at push time was the SYMPTOM.
+          #
+          # The stale read is the defect, and it is a re-mail hazard in its own
+          # right: only the Gmail-side queued-draft check stopped it re-drafting
+          # people the sibling run had drafted minutes earlier.
+          #
+          # The Commit state retry loop below is deliberately LEFT ALONE. With this
+          # re-sync the deterministic conflict class cannot recur, so any conflict
+          # that survives means a writer landed DURING the run, which is exactly the
+          # case where silently picking a side is unsafe and a loud failure is right.
+          git fetch origin "${{ github.ref_name }}"
+          git reset --hard "origin/${{ github.ref_name }}"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Real outbound counts on every pool row, so rank() can put "cold mail, no
+      # follow-up" first. One Gmail search per lead, no Anthropic call, and idempotent.
+      # It runs BEFORE the batch because the batch sorts the pool on these numbers.
+      - name: Backfill true touch counts
+        continue-on-error: true
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+        run: python -m pipeline.backfill_touches
+
+      - name: Run daily batch
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
+          DAILY_CAP: ${{ vars.DAILY_CAP || '250' }}
+          QUEUE_MAX: ${{ vars.QUEUE_MAX || '900' }}
+          STALE_DAYS: ${{ vars.STALE_DAYS || '7' }}
+          # 7 days, not 14: the 09-09, 09-11 and 09-12 cohorts (146 + 300 + 286 humans,
+          # one touch each against a cap of six) are the only supply that can hold a
+          # 250/day floor past day three. At 14 they unlock on 09-23, which leaves the
+          # pool empty from roughly 09-19. The cost of 7 is a thinner new-information
+          # claim in each follow-up, which is a copy problem, not a cadence problem.
+          RECYCLE_QUIET_DAYS: ${{ vars.RECYCLE_QUIET_DAYS || '7' }}
+          # Research is one Anthropic call per lead carrying server-side web search,
+          # and it was about nine tenths of the bill. Across 1,524 drafts it returned
+          # confidence 'low' 990 times, which craft discards outright, so two thirds of
+          # the most expensive call was paid for and thrown away. Off since 2026-09-24.
+          RESEARCH_ENABLED: ${{ vars.RESEARCH_ENABLED || 'false' }}
+          # Deterministic zero-API copy when the model is unavailable or its draft is
+          # rejected. Without it, a dead credit balance means zero drafts, which is what
+          # happened on three consecutive days in September.
+          TEMPLATE_FALLBACK: ${{ vars.TEMPLATE_FALLBACK || 'true' }}
+          API_FAIL_STREAK: ${{ vars.API_FAIL_STREAK || '5' }}
+          MIN_QUIET_DAYS: ${{ vars.MIN_QUIET_DAYS || '3' }}
+          ABANDON_DAYS: ${{ vars.ABANDON_DAYS || '30' }}
+          WEB_SEARCH_MAX_USES: ${{ vars.WEB_SEARCH_MAX_USES || '6' }}
+          CRAFT_MODEL: ${{ vars.CRAFT_MODEL || 'claude-sonnet-5' }}
+          RESEARCH_MODEL: ${{ vars.RESEARCH_MODEL || 'claude-sonnet-5' }}
+        run: |
+          python -m pipeline.run_daily \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }} \
+            ${{ (github.event.schedule == '13 7 * * *' || github.event.schedule == '13 11 * * *' || (github.event_name == 'workflow_dispatch' && inputs.top_up)) && '--top-up' || '' }} \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.force) && '--force' || '' }} \
+            --limit ${{ (github.event_name == 'workflow_dispatch' && inputs.limit) || '0' }}
+
+      - name: Commit state
+        if: always()
+        run: |
+          git config user.name "outreach-bot"
+          git config user.email "actions@github.com"
+          git add state/ || true
+          if git diff --staged --quiet; then echo "no state changes"; exit 0; fi
+          git commit -q -m "state: run $(date -u +%Y-%m-%d)"
+          # `git pull --rebase --autostash || true; git push || true` used to hide a real
+          # data-loss race. The queue guard writes holds.json and pool.json at 03:45 while
+          # a daily run (00:30 start, up to 330 min) is often still going. When the guard's
+          # commit lands first, this rebase CONFLICTS, `|| true` swallows it, the repo is
+          # left mid-rebase, the push fails silently, and THE ENTIRE RUN'S STATE IS
+          # DISCARDED while the job reports success. A reverted sent_log means those leads
+          # get mailed a second time.
+          # Retry the benign non-fast-forward case; fail LOUDLY if it cannot be resolved,
+          # because a visible failure is recoverable and silent state loss is not.
+          ok=0
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then ok=1; break; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::State could not be pushed after 5 attempts. THIS RUN'S STATE IS LOST: pool/sent_log/holds have reverted, so leads processed today may be re-mailed tomorrow. Re-run this workflow before the next scheduled run."
+            exit 1
+          fi
+          echo "state pushed"
+
+      - name: Publish run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-report-${{ github.run_number }}
+          path: state/runs/
+          if-no-files-found: ignore
+
+      - name: Job summary
+        if: always()
+        run: |
+          F="$(ls -1t state/runs/$(date -u +%Y-%m-%d)*.json 2>/dev/null | head -1)"
+          echo "## Outreach run $(date -u +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$F" ] && [ -f "$F" ]; then
+            python - "$F" >> $GITHUB_STEP_SUMMARY <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1],encoding="utf-8"))
+          s=r.get("summary",{})
+          print(f"- created: **{s.get('created',0)}** of allowed {s.get('allowed',0)}")
+          print(f"- created today across passes: **{s.get('created_today_total','?')}**, "
+                f"shortfall against the floor: {s.get('deficit_today','?')}")
+          print(f"- pending drafts before run: {s.get('pending_before','?')} "
+                f"(stale >7d: {s.get('stale_queued','?')})")
+          print(f"- pool remaining: {s.get('pool_remaining','?')}")
+          print(f"- reply-due (need a human answer): **{s.get('reply_due',0)}**")
+          print(f"- held for review: {s.get('held',0)}")
+          for x in r.get("reply_due",[])[:20]:
+              print(f"  - REPLY DUE: {x['email']}")
+          if r.get("errors"): print("- errors:", "; ".join(r["errors"][:5]))
+          PY
+          else
+            echo "No report written (run aborted early)." >> $GITHUB_STEP_SUMMARY
+          fi

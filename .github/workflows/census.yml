@@ -1,0 +1,61 @@
+name: Three-month census
+
+# Manual only. Read-only unless add_to_pool is set. Makes no Anthropic call and sends
+# nothing: it walks `in:sent` over the window, reads the To header off each message, and
+# counts MESSAGES per person. Threads would undercount, which is exactly how sent_log
+# came to be wrong for every row in the pool.
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Window in days (95 is about three months)"
+        type: string
+        default: "95"
+      add_to_pool:
+        description: "Append actionable cold-mail-only leads to pool.json"
+        type: boolean
+        default: false
+
+concurrency:
+  group: outreach-drafts
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    # One metadata fetch per sent message. A few thousand messages at Gmail's pace is
+    # the whole cost, and it is all reads.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Census
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+        run: |
+          python -m pipeline.census --days ${{ inputs.days }} \
+            ${{ inputs.add_to_pool && '--add-to-pool' || '' }}
+      - name: Commit report
+        if: always()
+        run: |
+          git config user.name "outreach-bot"
+          git config user.email "actions@github.com"
+          git add state/ || true
+          if git diff --staged --quiet; then echo "no changes"; exit 0; fi
+          git commit -q -m "census: $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          echo "::error::census report could not be pushed; recover it from this run's log"
+          exit 1

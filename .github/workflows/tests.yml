@@ -1,0 +1,64 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Gate tests (no secrets needed)
+        run: python -m tests.test_pipeline
+      - name: End-to-end tests (fake mailbox + fake model, real orchestrator)
+        run: python -m tests.test_e2e
+      - name: Queue guard tests
+        run: python -m tests.test_queue_guard
+      - name: Dispatch tests (the only component that delivers mail)
+        run: python -m tests.test_dispatch
+      - name: Tone and voice doctrine gate
+        run: python -m tests.test_tone
+      - name: Import check
+        run: python -c "from pipeline import run_daily, run_guard, run_dispatch, queue_guard, dispatch, craft, research, gmail_api, llm, tone, validate; print('imports ok')"
+      - name: Dispatch ships disabled
+        run: |
+          python - <<'PY'
+          import re
+          y = open('.github/workflows/dispatch.yml', encoding='utf-8').read()
+          # Neither arming flag may ever be hard-coded on in the workflow file: both must
+          # come from repo variables a human sets by hand.
+          for bad in ('DISPATCH_ENABLED: true', "DISPATCH_ENABLED: 'true'",
+                      'DISPATCH_LIVE: true', "DISPATCH_LIVE: 'true'"):
+              assert bad not in y, f"dispatch.yml hard-codes {bad!r}"
+          assert 'vars.DISPATCH_ENABLED' in y and 'vars.DISPATCH_LIVE' in y
+          # Dispatch must run AFTER the queue guard, or replies get mailed over.
+          dc = re.search(r'- cron: "([^"]+)"', y).group(1)
+          gc = re.search(r'- cron: "([^"]+)"',
+                         open('.github/workflows/queue_guard.yml', encoding='utf-8').read()).group(1)
+          d_first = int(dc.split()[1].split('-')[0]) * 60 + int(dc.split()[0])
+          g_min = int(gc.split()[1]) * 60 + int(gc.split()[0])
+          assert d_first > g_min, f"dispatch {dc!r} starts before queue guard {gc!r}"
+          print(f"dispatch cron {dc!r} starts after guard {gc!r}, and ships disabled")
+          PY
+      - name: Workflow schedule sanity
+        run: |
+          python - <<'PY'
+          import re
+          y = open('.github/workflows/daily.yml', encoding='utf-8').read()
+          cron = re.search(r'- cron: "([^"]+)"', y).group(1)
+          m, h = int(cron.split()[0]), int(cron.split()[1])
+          # Assert the LESSON rather than a literal time. GitHub drops scheduled runs
+          # during high load and names midnight UTC and the top of every hour as the
+          # worst slots. 00:30 cost us two consecutive ~4.5h-late runs.
+          assert h != 0, f"cron hour 0 is the midnight-UTC congestion window: {cron!r}"
+          assert m not in (0, 30), f"minute {m} is a congested round slot: {cron!r}"
+          assert 0 <= (h * 60 + m) < 24 * 60, f"bad cron {cron!r}"
+          ist = (h * 60 + m + 330) % 1440
+          print(f"cron {cron!r} = {ist//60:02d}:{ist%60:02d} IST, off the congested slots")
+          PY

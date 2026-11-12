@@ -1,0 +1,197 @@
+name: Paced dispatch
+
+# Sends queued drafts from the CLOUD, slowly, instead of the mailbox owner firing the
+# whole drafts folder from the Gmail Android app in one burst.
+#
+# WHY: on 2026-09-09 that manual burst pushed ~226 messages in 32 minutes (about 7/min).
+# Gmail rate-limits a burst like that with 403 userRateLimitExceeded, the Android client
+# does not surface the refusal, and 84 messages wedged in the Outbox at Queued/Uploading/
+# Sending. Force-stop, network switch and cache clear could not fix it: every one of those
+# is a device-side remedy for a server-side refusal.
+#
+# SCHEDULE: hourly at :07, 04:00-13:00 UTC (09:37-18:37 IST). Deliberately AFTER the
+# queue guard at 03:45 UTC, so replies are pulled out of the queue before anything ships.
+# Hourly rather than every-few-minutes because GitHub's scheduler drops high-frequency
+# crons under load; a missed run here just means the cap fills an hour later.
+#
+# THROUGHPUT: DISPATCH_MAX_PER_RUN x 10 runs, floored by DISPATCH_DAILY_CAP. At the
+# defaults (15/run, 120/day, 30s apart) the account sees at most ~2 sends per minute in
+# short bursts, an order of magnitude gentler than what broke.
+#
+# ARMING (both required, neither is set by any code path):
+#   Repo variable DISPATCH_ENABLED=true   -> the job does anything at all
+#   Repo variable DISPATCH_LIVE=true      -> it actually delivers instead of dry-running
+
+on:
+  schedule:
+    - cron: "7 4-13 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be sent, send nothing"
+        type: boolean
+        default: true
+      max:
+        description: "Max sends this run"
+        type: string
+        default: "5"
+      allow_ids:
+        description: "Comma-separated draft ids to authorise explicitly (app-built drafts)"
+        type: string
+        default: ""
+      created_on:
+        description: "Only drafts created on this UTC date, YYYY-MM-DD (blank = whole queue)"
+        type: string
+        default: ""
+      inventory:
+        description: "Report every draft and why it is or is not sendable, send nothing"
+        type: boolean
+        default: false
+      ignore_standdown:
+        description: "Release an active post-rate-limit stand-down for THIS run only"
+        type: boolean
+        default: false
+
+concurrency:
+  # Its own group. Sharing one with the daily batch would let a long craft run block
+  # dispatch, or worse, let a cancel-in-progress kill a job midway through sending.
+  group: outreach-dispatch
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    # 15 sends x 30s pacing is ~8 min, and the rest was headroom for 403 backoff. Raised
+    # to 330 on 2026-09-18 for a one-off, human-authorised full-day drain: at 30s pacing
+    # a 250-draft day is ~2 hours of wall clock, and a timeout mid-drain is not merely a
+    # slow job, it is SIGINT through the send loop. The finally-block in run_dispatch
+    # catches BaseException precisely so the counter survives that, but the remaining
+    # drafts then need another run. Cheaper to have room. Scheduled runs are bounded by
+    # --max, not by this number, so nothing about the routine cadence changes.
+    # 330 -> 200 on 2026-09-28. Same honesty as daily.yml: this saves nothing today.
+    # Over 30 days the longest dispatch run was 106 minutes and the scheduled ones averaged
+    # 2.3, because DISPATCH_ENABLED is false and they exit immediately. The ceiling is a
+    # brake for the day somebody arms it and a send loop stalls.
+    #
+    # NOTE for whoever arms it: the schedule above is hourly, 04:00-13:00 UTC, so TEN runs
+    # a day. That is cheap only while the job exits on the disabled check. Armed and doing
+    # real work it becomes the most expensive thing in the repo, and the cron wants cutting
+    # at the same time as the arming, not afterwards.
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      # WATCHDOG. GitHub's `schedule` trigger fails SILENTLY: a dropped run leaves no
+      # entry in the Actions history, no log and no notification, so a daily batch that
+      # simply never fires is invisible until somebody thinks to look. Observed here:
+      # of ~11 scheduled opportunities over the first 36 hours exactly ONE fired, and the
+      # ones that did ran 4.5 hours late.
+      # This job runs 10x/day, so it is the cheapest available place to notice. It cannot
+      # make the daily run, but it CAN convert "silently never happened" into a red X.
+      # Deliberately never fails the dispatch step itself: dispatching is still correct
+      # and useful when the drafter is broken.
+      - name: Watchdog - has the daily batch run?
+        if: always()
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import datetime, json, os
+          p = "state/meta.json"
+          if not os.path.exists(p):
+              print("no meta.json yet, nothing to check"); raise SystemExit(0)
+          meta = json.load(open(p, encoding="utf-8"))
+          last = meta.get("last_run_date")
+          today = datetime.datetime.now(datetime.timezone.utc).date()
+          hour = datetime.datetime.now(datetime.timezone.utc).hour
+          if not last:
+              print("::warning::meta.json has no last_run_date"); raise SystemExit(0)
+          age = (today - datetime.date.fromisoformat(last)).days
+          print(f"last daily run: {last} ({age}d ago), now {today} {hour:02d}:xx UTC")
+          if age >= 2:
+              print(f"::error::The daily outreach batch has not run for {age} days "
+                    f"(last {last}). GitHub's cron drops scheduled runs silently. "
+                    f"Trigger it by hand: gh workflow run 'Daily outreach batch'")
+          elif age == 1 and hour >= 12:
+              print(f"::warning::No daily batch yet today (last {last}) and it is already "
+                    f"{hour:02d}:00 UTC. The scheduled slot has probably been dropped.")
+          else:
+              print("daily batch is current")
+          PY
+
+      - name: Dispatch
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          # An unset repo variable expands to "", which would be falsy anyway, but be
+          # explicit: the python side requires the literal string "true".
+          DISPATCH_ENABLED: ${{ vars.DISPATCH_ENABLED }}
+          DISPATCH_LIVE: ${{ vars.DISPATCH_LIVE }}
+          DISPATCH_DAILY_CAP: ${{ vars.DISPATCH_DAILY_CAP || '120' }}
+          DISPATCH_MAX_PER_RUN: ${{ vars.DISPATCH_MAX_PER_RUN || '15' }}
+          DISPATCH_PACE_SECONDS: ${{ vars.DISPATCH_PACE_SECONDS || '30' }}
+        # GitHub runs `run:` blocks with `bash -e`, so a non-zero exit aborts the script
+        # AT THAT LINE. The previous version put `code=$?` on the next line, which was
+        # therefore unreachable: exit 5 (shipped-disabled) and exit 3 (deliberate
+        # stand-down) both marked the job FAILED. At 10 scheduled runs a day that is 10
+        # red X's for correct behaviour, which trains the operator to ignore this workflow
+        # exactly when a real failure needs noticing. `|| code=$?` keeps -e satisfied.
+        run: |
+          code=0
+          python -m pipeline.run_dispatch \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }} \
+            ${{ github.event_name == 'workflow_dispatch' && format('--max {0}', inputs.max) || '' }}             ${{ (github.event_name == 'workflow_dispatch' && inputs.allow_ids != '') && format('--allow-ids {0}', inputs.allow_ids) || '' }}             ${{ (github.event_name == 'workflow_dispatch' && inputs.created_on != '') && format('--created-on {0}', inputs.created_on) || '' }}             ${{ (github.event_name == 'workflow_dispatch' && inputs.inventory) && '--inventory' || '' }} ${{ (github.event_name == 'workflow_dispatch' && inputs.ignore_standdown) && '--ignore-standdown' || '' }} \
+            || code=$?
+          echo "run_dispatch exited $code"
+          # 5 = disabled, 3 = deliberate stand-down. Both are normal, not build failures.
+          if [ "$code" = "5" ] || [ "$code" = "3" ]; then exit 0; fi
+          exit $code
+
+      - name: Commit dispatch counter
+        if: always()
+        run: |
+          git config user.name "outreach-bot"
+          git config user.email "actions@github.com"
+          git add state/ || true
+          if git diff --staged --quiet; then echo "no state changes"; exit 0; fi
+          git commit -q -m "dispatch: $(date -u +%Y-%m-%dT%H:%MZ)"
+          # This job writes only state/dispatch.json, which no other workflow touches, so
+          # a conflict here is a benign non-fast-forward rather than a content clash. It
+          # still must not be swallowed: dispatch.json holds the daily SENT COUNTER, and
+          # losing it resets the count to zero. The cap then stops binding and the next
+          # slots send a second full day's worth into an account that has already had one.
+          ok=0
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then ok=1; break; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::Dispatch counter could not be pushed after 5 attempts. state/dispatch.json has reverted, so the daily send cap is no longer binding. Disable DISPATCH_LIVE until this is resolved."
+            exit 1
+          fi
+          echo "state pushed"
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## Paced dispatch $(date -u +%Y-%m-%dT%H:%MZ)" >> $GITHUB_STEP_SUMMARY
+          if [ -f state/dispatch.json ]; then
+            python - >> $GITHUB_STEP_SUMMARY <<'PY'
+          import json
+          s = json.load(open("state/dispatch.json", encoding="utf-8"))
+          print(f"- UTC day: **{s.get('date')}**")
+          print(f"- sent today: **{s.get('sent', 0)}**")
+          if s.get("halted_until"):
+              print(f"- STAND-DOWN until **{s['halted_until']}** (rate limit seen)")
+          PY
+          else
+            echo "- no dispatch state yet (disabled or dry run)" >> $GITHUB_STEP_SUMMARY
+          fi

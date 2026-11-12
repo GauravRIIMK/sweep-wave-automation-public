@@ -1,0 +1,64 @@
+name: Rebuild drafts that were never sent
+
+# Manual only, and it requires a domain list: this repairs a NAMED slice, never the whole
+# corpus. Makes no Anthropic call (copy comes from template_craft) so it works with a dead
+# credit balance, and every rebuilt draft carries the resume because create_reply_draft
+# refuses to build one without it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domains:
+        description: "Comma-separated domains, e.g. swiggy.in,flipkart.com"
+        type: string
+        required: true
+      days:
+        description: "How many days back to check"
+        type: string
+        default: "2"
+      dry_run:
+        description: "Report which sends failed, create nothing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: outreach-drafts
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  resend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Rebuild
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+        run: |
+          python -m pipeline.resend_failed \
+            --domains "${{ inputs.domains }}" --days ${{ inputs.days }} \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
+      - name: Commit report
+        if: always()
+        run: |
+          git config user.name "outreach-bot"
+          git config user.email "actions@github.com"
+          git add state/ || true
+          if git diff --staged --quiet; then echo "no changes"; exit 0; fi
+          git commit -q -m "resend: $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          echo "::error::resend report could not be pushed; recover the draft ids from this run's log"
+          exit 1
